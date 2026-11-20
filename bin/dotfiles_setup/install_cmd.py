@@ -1,9 +1,8 @@
-"""The `dotfiles-setup install` command: plan, ask, apply, then persist."""
+"""The `dfctl apply` command (alias `install`): plan, ask, apply, then persist."""
 from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 from typing import Any
 
 from dotfiles_setup import (
@@ -11,9 +10,13 @@ from dotfiles_setup import (
     foothold,
     install_flow,
     overlay,
+    overlay_migrate,
+    path_dirs,
     rollback,
     state,
     tooling,
+    update_stamp,
+    worktree,
 )
 from dotfiles_setup.approval import _approved_removals
 from dotfiles_setup.backends import InstallResult
@@ -31,6 +34,7 @@ from dotfiles_setup.result import Err, Ok, Result
 from dotfiles_setup.transcript import Transcript, open_transcript
 
 PERSIST_FAILED_EXIT_CODE = 4
+PATH_LIST_FAILED_EXIT_CODE = 2
 TRANSCRIPT_DIR = ".local/state/dotfiles/logs"
 
 
@@ -38,22 +42,17 @@ def _log_install_failure(logger: Logger, result: InstallResult) -> None:
     logger.error(result.stdout or f"The install failed with exit code {result.returncode}. See output above.")
 
 
-def _sync_foothold(logger: Logger, preset: Preset) -> None:
-    foothold.sync_footholds(logger, preset.footholds)
-
-
-def _in_linked_worktree(dotfiles_dir: Path) -> bool:
-    """A linked worktree has a `.git` file pointing at the main checkout; the main checkout has a `.git` directory."""
-    return (dotfiles_dir / ".git").is_file()
+def _sync_foothold(logger: Logger, preset: Preset, path_entries: tuple[str, ...]) -> None:
+    foothold.sync_footholds(logger, preset.footholds, path_entries)
 
 
 def _refuses_worktree(args: argparse.Namespace, env: Env) -> bool:
     roots = (env.dotfiles_dir, overlay.find_overlay_root())
-    worktree = next((root for root in roots if root is not None and _in_linked_worktree(root)), None)
-    if args.dry_run or worktree is None:
+    linked = next((root for root in roots if root is not None and worktree.is_linked_worktree(root)), None)
+    if args.dry_run or linked is None:
         return False
     Logger(dry_run=False, verbosity=args.verbosity).error(
-        f"Refusing to install with the linked worktree {worktree} as a dotfiles checkout: stow would link /etc and "
+        f"Refusing to install with the linked worktree {linked} as a dotfiles checkout: stow would link /etc and "
         "$HOME into it. Use the main checkouts, or pass --dry-run.")
     return True
 
@@ -85,6 +84,8 @@ def _install_for_preset(args: argparse.Namespace, logger: Logger, env: Env) -> i
     if preset_name is None:
         logger.error("No preset saved on this machine; pass --preset <name>.")
         return 2
+    if not overlay_migrate.migrate_legacy_overlay(_tooling(logger, env), rollback.RollbackLog.for_home(env.home)):
+        return 1
     match _build_plan(args, logger, env, preset_name, prior):
         case Err(error=message):
             logger.error(message)
@@ -109,7 +110,18 @@ def _flow_inputs(
 
 
 def _apply_install(args: argparse.Namespace, logger: Logger, env: Env, plan: _Install) -> int:
-    claude_settings = _merged_claude_settings(plan.dotfiles_dir, plan.overlay_root, plan.preset, env.home)
+    match path_dirs.load(plan.dotfiles_dir, plan.overlay_root):
+        case Err(error=message):
+            logger.error(message)
+            return PATH_LIST_FAILED_EXIT_CODE
+        case Ok(value=path_entries):
+            return _apply_with_path(args, logger, env, plan, path_entries)
+
+
+def _apply_with_path(
+    args: argparse.Namespace, logger: Logger, env: Env, plan: _Install, path_entries: tuple[str, ...],
+) -> int:
+    claude_settings = _merged_claude_settings(plan.dotfiles_dir, plan.overlay_root, plan.preset, env.home, path_entries)
     t = _tooling(logger, env)
     match _approval(args, t, plan):
         case Err(error=message):
@@ -118,7 +130,8 @@ def _apply_install(args: argparse.Namespace, logger: Logger, env: Env, plan: _In
         case Ok(value=approved):
             # Before the steps: the cozempic install creates ~/.claude/settings.json when it is absent.
             _write_claude_settings(logger, claude_settings, env)
-            return _run_flow(args, env, plan, claude_settings, _flow_inputs(t, env, plan, args, approved))
+            inputs = _flow_inputs(t, env, plan, args, approved)
+            return _run_flow(args, env, plan, claude_settings, path_entries, inputs)
 
 
 def _approval(args: argparse.Namespace, t: tooling.Tooling, plan: _Install) -> Result[tuple[str, ...]]:
@@ -131,7 +144,7 @@ def _approval(args: argparse.Namespace, t: tooling.Tooling, plan: _Install) -> R
 
 def _run_flow(
     args: argparse.Namespace, env: Env, plan: _Install, claude_settings: dict[str, Any],
-    inputs: install_flow.FlowInputs,
+    path_entries: tuple[str, ...], inputs: install_flow.FlowInputs,
 ) -> int:
     logger = inputs.t.logger
     result = install_flow.run_install(inputs)
@@ -140,17 +153,19 @@ def _run_flow(
         if result.rollback_pending:
             rollback.offer_rollback(_rollback_context(logger, env, plan), interactive=sys.stdin.isatty())
         return result.returncode
-    return _finish_install(args, logger, env, plan, claude_settings, inputs)
+    return _finish_install(args, logger, env, plan, claude_settings, path_entries, inputs)
 
 
 def _finish_install(
     args: argparse.Namespace, logger: Logger, env: Env, plan: _Install, claude_settings: dict[str, Any],
-    inputs: install_flow.FlowInputs,
+    path_entries: tuple[str, ...], inputs: install_flow.FlowInputs,
 ) -> int:
     claude_plugins.update_claude_plugins(logger, claude_settings)
-    _sync_foothold(logger, plan.preset)
+    _sync_foothold(logger, plan.preset, path_entries)
     if not (args.dry_run or _persist(logger, env, plan, inputs)):
         return PERSIST_FAILED_EXIT_CODE
+    if not args.dry_run:
+        update_stamp.record_apply(logger, env.home, env.clock())
     install_flow.print_completion_banner(logger)
     logger.success(f"Machine preset set to '{plan.preset.name}'.")
     return 0

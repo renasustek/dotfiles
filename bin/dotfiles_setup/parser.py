@@ -1,4 +1,4 @@
-"""The dotfiles-setup argument parser."""
+"""The dfctl argument parser."""
 from __future__ import annotations
 
 import argparse
@@ -29,11 +29,12 @@ class _AddVerbosity(argparse.Action):
 _DRY_RUN_HELP = "Show what would be done without executing commands."
 _EPILOG = (
     "Examples:\n"
-    "  dotfiles-setup install --preset work\n"
-    "  dotfiles-setup install  (reuses the preset saved on this machine)\n"
-    "  dotfiles-setup install --preset personal --dry-run\n"
-    "  dotfiles-setup install --preset homelab -v\n"
-    "  dotfiles-setup private clone --repo git@github.com:you/dotfiles-private.git\n"
+    "  dfctl apply --preset work\n"
+    "  dfctl apply  (reuses the preset saved on this machine)\n"
+    "  dfctl apply --preset personal --dry-run\n"
+    "  dfctl apply --preset homelab -v\n"
+    "  dfctl propose  (commit local config changes and open a PR)\n"
+    "  dfctl overlay clone --repo git@github.com:you/dotfiles-overlay.git\n"
 )
 _VERBOSITY_FLAGS = (
     (("-v", "--verbose"), 1, "Show step-by-step progress (INFO/SUCCESS messages)."),
@@ -92,20 +93,22 @@ def _add_verbosity_flags(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_install_parser(sub: Any) -> None:
-    install_p = sub.add_parser("install", help="install packages and dotfiles for a machine profile")
-    _add_install_flags(install_p)
-    _add_verbosity_flags(install_p)
-    install_p.set_defaults(verbosity=0)
+    apply_help = {"help": "make this machine match the repo: install, update and remove packages and config"}
+    for name, extra in {"apply": apply_help, "install": {}}.items():
+        command_p = sub.add_parser(name, **extra)
+        _add_install_flags(command_p)
+        _add_verbosity_flags(command_p)
+        command_p.set_defaults(verbosity=0)
 
 
-def _build_clone_parser(private_sub: Any) -> None:
-    clone_p = private_sub.add_parser(
-        "clone", help="git-clone your private overlay repo so install can auto-detect and layer it"
+def _build_clone_parser(overlay_sub: Any) -> None:
+    clone_p = overlay_sub.add_parser(
+        "clone", help="git-clone your overlay repo so apply can auto-detect and layer it"
     )
     clone_p.add_argument(
         "--repo",
         required=True,
-        help="Git URL of your private overlay repo, e.g. git@github.com:you/dotfiles-private.git",
+        help="Git URL of your overlay repo, e.g. git@github.com:you/dotfiles-overlay.git",
     )
     clone_p.add_argument(
         "--dest", type=Path, default=None, help=f"Clone destination (default: {overlay.DEFAULT_OVERLAY_ROOT})."
@@ -117,10 +120,17 @@ def _build_clone_parser(private_sub: Any) -> None:
     clone_p.set_defaults(verbosity=0)
 
 
-def _build_private_parser(sub: Any) -> None:
-    private_p = sub.add_parser(
-        "private", help="manage the optional private overlay repo (see AGENTS.md's Presets and Portability)"
+def _build_overlay_parser(sub: Any) -> None:
+    overlay_p = sub.add_parser(
+        "overlay", help="manage the optional overlay repo (see AGENTS.md's Presets and Portability)"
     )
+    overlay_sub = overlay_p.add_subparsers(dest="overlay_command", metavar="overlay-command", required=True)
+    _build_clone_parser(overlay_sub)
+
+
+def _build_private_parser(sub: Any) -> None:
+    """The old name of `overlay`; it parses the same way and the command prints a deprecation notice."""
+    private_p = sub.add_parser("private")
     private_sub = private_p.add_subparsers(dest="private_command", metavar="private-command", required=True)
     _build_clone_parser(private_sub)
 
@@ -144,15 +154,22 @@ def _build_foothold_parser(sub: Any) -> None:
     _build_restart_parser(foothold_sub)
 
 
+def _build_propose_parser(sub: Any) -> None:
+    summary = "commit changes to a branch, push it and open a PR (backup/<timestamp> from main); main checkout only"
+    sub.add_parser("propose", help=summary, description=f"{summary[0].upper()}{summary[1:]}.")
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="dotfiles-setup",
+        prog="dfctl",
         description="Bootstrap this machine from the dotfiles repo.",
         epilog=_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", metavar="command")
     _build_install_parser(sub)
+    _build_propose_parser(sub)
+    _build_overlay_parser(sub)
     _build_private_parser(sub)
     _build_foothold_parser(sub)
     return parser

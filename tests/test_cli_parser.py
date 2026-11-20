@@ -52,32 +52,56 @@ def test_main_without_command_prints_help_and_returns_1(capsys):
     assert "install" in out
 
 
-def test_top_level_help_lists_install_subcommand_and_examples(capsys):
+def test_top_level_help_lists_apply_subcommand_and_examples(capsys):
     parser = build_arg_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["-h"])
     out = capsys.readouterr().out
-    assert "install" in out
+    assert "apply" in out
     assert "Examples:" in out
-    assert "dotfiles-setup install --preset work" in out
+    assert "dfctl apply --preset work" in out
 
 
-def test_private_clone_requires_subcommand():
+def test_help_hides_install_alias(capsys):
+    with pytest.raises(SystemExit):
+        build_arg_parser().parse_args(["-h"])
+    command_lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("    ")]
+    assert not any(line.split()[0] == "install" for line in command_lines if line.split())
+
+
+def test_apply_parses_install_flags():
+    args = build_arg_parser().parse_args(["apply", "--preset", "work", "--prune"])
+    assert (args.command, args.preset, args.prune) == ("apply", "work", True)
+
+
+def test_install_alias_still_parses():
+    assert build_arg_parser().parse_args(["install", "--preset", "work"]).command == "install"
+
+
+@pytest.mark.parametrize("command", ["overlay", "private"])
+def test_overlay_clone_requires_subcommand(command):
     parser = build_arg_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["private"])
+        parser.parse_args([command])
 
 
-def test_private_clone_requires_repo():
+@pytest.mark.parametrize("command", ["overlay", "private"])
+def test_overlay_clone_requires_repo(command):
     parser = build_arg_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(["private", "clone"])
+        parser.parse_args([command, "clone"])
 
 
-def test_private_clone_dest_defaults_to_none():
+def test_overlay_clone_dest_defaults_to_none():
     parser = build_arg_parser()
-    args = parser.parse_args(["private", "clone", "--repo", "git@github.com:you/dotfiles-private.git"])
+    args = parser.parse_args(["overlay", "clone", "--repo", "git@github.com:you/dotfiles-overlay.git"])
     assert args.dest is None
+
+
+def test_the_private_command_is_hidden_from_help():
+    help_text = build_arg_parser().format_help()
+    assert "overlay" in help_text
+    assert "private" not in help_text
 
 
 def test_foothold_requires_subcommand():
@@ -94,6 +118,7 @@ def test_env_now_iso_uses_clock():
 def test_each_subcommand_parser_is_built_by_its_own_function():
     parser = build_arg_parser()
     assert parser.parse_args(["install", "-vv", "--force"]).verbosity == 2
+    assert parser.parse_args(["overlay", "clone", "--repo", "x"]).overlay_command == "clone"
     assert parser.parse_args(["private", "clone", "--repo", "x"]).private_command == "clone"
 
 

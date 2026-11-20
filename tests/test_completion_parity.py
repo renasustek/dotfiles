@@ -7,7 +7,7 @@ from _completion import complete
 from dotfiles_setup.cli import build_arg_parser
 
 ZSH = (
-    Path(__file__).resolve().parent.parent / "zsh/.config/zsh/completions/_dotfiles-setup"
+    Path(__file__).resolve().parent.parent / "zsh/.config/zsh/completions/_dfctl"
 ).read_text(encoding="utf-8")
 
 
@@ -19,9 +19,14 @@ def _subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentP
     return found
 
 
+DEPRECATED_ALIASES = {"install", "private"}
+
+
 def _leaf_parsers() -> dict[str, argparse.ArgumentParser]:
     leaves: dict[str, argparse.ArgumentParser] = {}
     for name, parser in _subparsers(build_arg_parser()).items():
+        if name in DEPRECATED_ALIASES:
+            continue
         nested = _subparsers(parser)
         if nested:
             leaves.update({f"{name} {child}": p for child, p in nested.items()})
@@ -36,7 +41,8 @@ def _options(parser: argparse.ArgumentParser) -> set[str]:
 
 def _zsh_block(command: str) -> str:
     name = command.split()[0]
-    match = re.search(rf"^      {name}\)\n(.*?)(?=^      \w+\)\n|\Z)", ZSH, re.DOTALL | re.MULTILINE)
+    arm = rf"(?:\w+\|)*{name}(?:\|\w+)*"
+    match = re.search(rf"^      {arm}\)\n(.*?)(?=^      [\w|]+\)\n|\Z)", ZSH, re.DOTALL | re.MULTILINE)
     assert match, f"zsh completion has no block for '{name}'"
     return match.group(1)
 
@@ -49,10 +55,16 @@ def _zsh_declares(block: str, option: str) -> bool:
 
 @pytest.mark.parametrize("command", sorted(_leaf_parsers()))
 def test_bash_completes_every_parser_option(command: str):
-    words = ["dotfiles-setup", *command.split(), "-"]
-    offered = set(complete("dotfiles-setup", "_dotfiles_setup_completions", words, len(words) - 1))
+    words = ["dfctl", *command.split(), "-"]
+    offered = set(complete("dfctl", "_dfctl_completions", words, len(words) - 1))
     missing = _options(_leaf_parsers()[command]) - offered
     assert not missing, f"bash completion lacks {sorted(missing)} for '{command}'"
+
+
+def test_bash_still_completes_the_deprecated_install_alias():
+    words = ["dfctl", "install", "--pre"]
+    offered = complete("dfctl", "_dfctl_completions", words, len(words) - 1)
+    assert "--preset" in offered
 
 
 @pytest.mark.parametrize("command", sorted(_leaf_parsers()))

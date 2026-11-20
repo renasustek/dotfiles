@@ -15,7 +15,14 @@ from dotfiles_setup.backends import InstallResult
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path_factory, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+    """Points HOME and every overlay location at a throwaway home, so no test can touch a real overlay checkout."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    for variable in (overlay.OVERLAY_ROOT_VARIABLE, overlay.LEGACY_ROOT_VARIABLE):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr(overlay, "DEFAULT_OVERLAY_ROOT", home / ".dotfiles-overlay")
+    monkeypatch.setattr(overlay, "LEGACY_OVERLAY_ROOT", home / ".dotfiles-private")
+    monkeypatch.setattr(overlay, "LOCAL_OVERLAY_ROOT", home / ".config" / "dotfiles" / "local-overlay")
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +55,7 @@ def foothold_syncs(monkeypatch):
     calls = []
     monkeypatch.setattr(
         "dotfiles_setup.foothold.sync_footholds",
-        lambda logger, wanted: calls.append(wanted),
+        lambda logger, wanted, path_entries: calls.append(wanted),
     )
     return calls
 
@@ -84,6 +91,7 @@ def isolated_dotfiles(tmp_path, monkeypatch, flow_calls, plugin_updates, foothol
     }))
     (dotfiles_dir / "presets" / "work.json").write_text(json.dumps({"package_files": ["apt_common.txt"]}))
     (dotfiles_dir / "packages" / "apt_common.txt").write_text("zsh\ncurl\n")
+    (dotfiles_dir / "packages" / "path_dirs.txt").write_text("~/.local/bin\n/usr/bin\n")
     (dotfiles_dir / "claude-profiles" / "claude_homelab.json").write_text("{}")
 
     (dotfiles_dir / "claude" / ".claude").mkdir(parents=True)

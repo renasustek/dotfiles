@@ -13,7 +13,7 @@ from dotfiles_setup.checksums import ChecksumError, verify_file
 from dotfiles_setup.release_installers import Resolved, download_with_cache, skip
 from dotfiles_setup.tooling import Tooling, dry_run_all
 
-PINNED_BUILD = "2.6.0-5526304964083712"
+PINNED_BUILD = "2.7.0-4507555968450560"
 ARCH_DIRS = {"x86_64": "linux-x64"}
 CACHE_TOOL = "antigravity-ide"
 DESKTOP_ENTRY = """[Desktop Entry]
@@ -221,6 +221,20 @@ def _installed_build(layout: Layout) -> str | None:
         return None
 
 
+def is_current(layout: Layout, resolved: Resolved) -> bool:
+    """True when the installed build marker names the resolved build."""
+    return _installed_build(layout) == resolved.cache_key.removesuffix(".tar.gz")
+
+
+def pending(layout: Layout | None = None, machine: str | None = None) -> bool:
+    """True when this architecture has a build and the installed build is absent or not the pinned one."""
+    layout = layout or Layout()
+    arch_dir = ARCH_DIRS.get(machine or platform.machine())
+    if arch_dir is None:
+        return False
+    return not is_current(layout, resolve_build(arch_dir))
+
+
 def install_antigravity_ide(t: Tooling, layout: Layout | None = None, machine: str | None = None) -> None:
     layout = layout or Layout()
     t.logger.info("Installing Antigravity IDE...")
@@ -235,7 +249,7 @@ def install_antigravity_ide(t: Tooling, layout: Layout | None = None, machine: s
     ):
         return
     resolved = resolve_build(arch_dir)
-    if _installed_build(layout) == resolved.cache_key.removesuffix(".tar.gz"):
+    if is_current(layout, resolved):
         t.logger.info(f"Antigravity IDE {resolved.version} is already installed. Skipping.")
         return
     with tempfile.TemporaryDirectory() as temp_dir:

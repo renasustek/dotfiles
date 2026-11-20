@@ -63,7 +63,6 @@ autoload -Uz $fpath[1]/*(:t)
 
 # Base PATH is defined in .zshenv.
 
-alias claude='claude-tmux main claude'
 alias claude-chrome='CLAUDE_CONFIG_DIR=~/.claude-chrome claude --chrome'
 
 # --- LOAD SECRET/MANUAL OVERRIDES ---
@@ -88,6 +87,8 @@ if [[ -r ~/.config/dotfiles/secrets.env ]]; then
 fi
 # --- END SECRET ENV VARS ---
 
+dfctl-update-check
+
 # --- DIRENV ---
 # Must follow the secrets blocks so .envrc values (e.g. SONARQUBE_CLI_ORG) win.
 if (( $+commands[direnv] )); then
@@ -109,6 +110,11 @@ fi
 if [[ -d $HOME/.local/share/pnpm ]]; then
     export PNPM_HOME="$HOME/.local/share/pnpm"
     path_prepend "$PNPM_HOME"
+fi
+
+if [[ -d $HOME/Android/Sdk ]]; then
+    export ANDROID_HOME="$HOME/Android/Sdk"
+    path_prepend "$ANDROID_HOME/platform-tools"
 fi
 
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!

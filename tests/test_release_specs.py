@@ -33,6 +33,34 @@ LEGACY = {
         "https://github.com/grafana/mcp-grafana/releases/download/v2.2.0/mcp-grafana_Linux_x86_64.tar.gz",
         "mcp-grafana-v2.2.0.tar.gz", "targz",
     ),
+    "chip": (
+        "chip", "0.0.67", "https://github.com/collibra/chip/releases/download/v0.0.67/chip-0.0.67-linux-amd64",
+        "chip-0.0.67", "binary",
+    ),
+    "kubectl": (
+        "kubectl", "v1.36.6", "https://dl.k8s.io/release/v1.36.6/bin/linux/amd64/kubectl", "kubectl-v1.36.6", "binary",
+    ),
+    "helm": (
+        "helm", "v4.3.2", "https://get.helm.sh/helm-v4.3.2-linux-amd64.tar.gz", "helm-v4.3.2.tar.gz", "targz",
+    ),
+    "flux": (
+        "flux", "2.10.0", "https://github.com/fluxcd/flux2/releases/download/v2.10.0/flux_2.10.0_linux_amd64.tar.gz",
+        "flux-2.10.0.tar.gz", "targz",
+    ),
+    "kubeconform": (
+        "kubeconform", "v0.8.0",
+        "https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz",
+        "kubeconform-v0.8.0.tar.gz", "targz",
+    ),
+    "cargo-deny": (
+        "cargo-deny", "0.22.0",
+        "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.22.0/cargo-deny-0.22.0-x86_64-unknown-linux-musl.tar.gz",
+        "cargo-deny-0.22.0.tar.gz", "targz",
+    ),
+    "sops": (
+        "sops", "v3.13.3", "https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64",
+        "sops-v3.13.3", "binary",
+    ),
 }
 GOOD = {
     "package": "tool", "name": "Tool", "version": "1.0", "url": "https://example.com/{version}/tool.tgz",
@@ -62,6 +90,11 @@ def test_a_well_formed_spec_loads():
 
 def test_the_binary_field_is_optional_and_kept():
     assert parse({**GOOD, "binary": "tool"}).value[0].binary == "tool"
+
+
+def test_a_binary_kind_needs_the_binary_field():
+    assert isinstance(parse({**GOOD, "kind": "binary"}), Err)
+    assert isinstance(parse({**GOOD, "kind": "binary", "binary": "tool"}), Ok)
 
 
 @pytest.mark.parametrize("field", rs.REQUIRED_FIELDS)

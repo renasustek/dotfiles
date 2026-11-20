@@ -13,14 +13,15 @@ from dotfiles_setup import (
     release_installers,
     vendor_installers,
 )
+from dotfiles_setup.rollback import RollbackLog
 from dotfiles_setup.tooling import Installer, Tooling, dry_run_all, fetch_https
 
-__all__ = ["TOOL_INSTALLERS", "Tooling", "fetch_https", "install_tools"]
+__all__ = ["SYSTEM_TOOL_INSTALLERS", "TOOL_INSTALLERS", "Tooling", "fetch_https", "install_system_tools", "install_tools"]
 
 SDKMAN_URL = "https://get.sdkman.io?rcupdate=false"
 OMZ_URL = "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
 NVM_RELEASE_API = "https://api.github.com/repos/nvm-sh/nvm/releases/latest"
-NVM_FALLBACK_URL = "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh"
+NVM_FALLBACK_URL = "https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh"
 NVM_HELP_URL = "https://github.com/nvm-sh/nvm#installing-and-updating"
 MSG_CONTINUING_SETUP = "Continuing with setup..."
 NODE_LTS_SCRIPT = (
@@ -114,8 +115,11 @@ TOOL_INSTALLERS: tuple[tuple[str, Installer], ...] = (
     ("oh-my-zsh", install_omz),
     ("sdkman", install_sdkman),
     ("nvm", install_nvm),
-    *release_installers.RELEASE_INSTALLERS,
+    *release_installers.USER_RELEASE_INSTALLERS,
     *vendor_installers.VENDOR_INSTALLERS,
+)
+SYSTEM_TOOL_INSTALLERS: tuple[tuple[str, Installer], ...] = (
+    *release_installers.SYSTEM_RELEASE_INSTALLERS,
     ("antigravity-ide", antigravity.install_antigravity_ide),
 )
 
@@ -127,8 +131,24 @@ def _run_installers(t: Tooling, table: tuple[tuple[str, Installer], ...], packag
     return True
 
 
-def install_tools(t: Tooling, package_names: Collection[str], upgrade: bool = False) -> bool:
-    installed = _run_installers(t, TOOL_INSTALLERS, package_names)
+def install_tools(t: Tooling, package_names: Collection[str]) -> bool:
+    return _run_installers(t, TOOL_INSTALLERS, package_names)
+
+
+def install_user_binaries(
+    t: Tooling, package_names: Collection[str], changes: RollbackLog | None = None, upgrade: bool = False,
+) -> bool:
+    """Installs the pinned release binaries into `~/.local/bin`, and with `upgrade` replaces older binaries listed in `UPGRADABLE_BINARIES`."""
+    if not release_installers.install_user_binaries(t, package_names, changes):
+        return False
+    if upgrade:
+        release_installers.upgrade_user_binaries(t, package_names)
+    return True
+
+
+def install_system_tools(t: Tooling, package_names: Collection[str], upgrade: bool = False) -> bool:
+    """Installs the release artifacts that need sudo, and with `upgrade` replaces older vendor debs."""
+    installed = _run_installers(t, SYSTEM_TOOL_INSTALLERS, package_names)
     if installed and upgrade:
         release_installers.upgrade_vendor_debs(t, package_names)
     return installed

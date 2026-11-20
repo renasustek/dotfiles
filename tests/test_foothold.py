@@ -1,10 +1,13 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 from dotfiles_setup import foothold
 from dotfiles_setup.log import Logger
+
+PATH_ENTRIES = ("~/.local/bin", "~/.dotfiles/bin", "/usr/bin")
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +30,7 @@ def _install(tmp_path, account="main", dry_run=False, run=None, burst_dir=None):
     run = run or _recording_run()[0]
     return foothold.install_foothold(
         Logger(dry_run=dry_run), account, unit_dir=tmp_path, run=run, burst_dir=burst_dir or tmp_path / "no-burst",
+        path_entries=PATH_ENTRIES,
     )
 
 
@@ -50,13 +54,13 @@ def test_burst_names_append_burst():
 
 
 def test_rendered_main_unit_names_the_remote_control_session_after_the_hostname():
-    unit = foothold.render_unit("main")
+    unit = foothold.render_unit("main", PATH_ENTRIES)
     assert _exec_start(unit).endswith("claude-foothold-launch --start claude-foothold %h/Workspace %H")
     assert "--settings" not in unit
 
 
 def test_rendered_burst_unit_runs_the_burst_account_as_hostname_burst():
-    unit = foothold.render_unit("burst")
+    unit = foothold.render_unit("burst", PATH_ENTRIES)
     assert _exec_start(unit).endswith("--start claude-foothold-burst %h/Workspace %H-burst burst")
     assert "ExecStop=-/usr/bin/env tmux kill-session -t =claude-foothold-burst\n" in unit
 
@@ -67,7 +71,7 @@ def _exec_start(unit):
 
 @pytest.mark.parametrize("account", foothold.ACCOUNTS)
 def test_sec012_rendered_unit_has_no_shell_string(account):
-    unit = foothold.render_unit(account)
+    unit = foothold.render_unit(account, PATH_ENTRIES)
     line = _exec_start(unit)
     assert "sh -c" not in unit
     assert "/bin/sh" not in unit
@@ -77,53 +81,71 @@ def test_sec012_rendered_unit_has_no_shell_string(account):
     assert command.startswith("%h/.dotfiles/bin/claude-foothold-launch --start ")
 
 
+def test_rendered_unit_path_is_the_list_with_percent_h():
+    unit = foothold.render_unit("main", ("~/.local/bin", "~/.krew/bin", "/usr/bin"))
+    assert 'Environment="PATH=%h/.local/bin:%h/.krew/bin:/usr/bin"' in unit
+
+
+def test_rendered_unit_path_keeps_a_literal_percent_literal_and_the_home_prefix_expandable():
+    unit = foothold.render_unit("main", ("/opt/%h/bin", "~/.local/bin"))
+    assert 'Environment="PATH=/opt/%%h/bin:%h/.local/bin"' in unit
+
+
+def test_rendered_unit_path_changes_with_the_list():
+    assert foothold.render_unit("main", ("~/a",)) != foothold.render_unit("main", ("~/b",))
+
+
 def test_rendered_unit_waits_for_connectivity_before_launching():
-    unit = foothold.render_unit("main")
+    unit = foothold.render_unit("main", PATH_ENTRIES)
     assert unit.index("ExecStartPre=") < unit.index("ExecStart=")
     assert foothold.NETWORK_PROBE_URL in unit
     assert "TimeoutStartSec=300" in unit
 
 
 def test_rendered_unit_starts_the_session_in_the_workspace_directory():
-    assert " %h/Workspace " in _exec_start(foothold.render_unit("main"))
+    assert " %h/Workspace " in _exec_start(foothold.render_unit("main", PATH_ENTRIES))
 
 
 def test_rendered_unit_resolves_curl_through_path():
-    assert "ExecStartPre=/usr/bin/env curl " in foothold.render_unit("main")
+    assert "ExecStartPre=/usr/bin/env curl " in foothold.render_unit("main", PATH_ENTRIES)
 
 
 def test_rendered_unit_retries_after_a_failed_connectivity_probe():
-    unit = foothold.render_unit("main")
+    unit = foothold.render_unit("main", PATH_ENTRIES)
     assert "Restart=on-failure" in unit
     assert "RestartSec=30" in unit
 
 
-def test_rendered_unit_puts_the_sonarqube_cli_on_path():
-    assert "%h/.local/share/sonarqube-cli/bin" in foothold.render_unit("main")
+def test_rendered_unit_finds_the_sonarqube_cli_through_the_user_bin_dir_link():
+    unit = foothold.render_unit("main", PATH_ENTRIES)
+    assert "%h/.local/bin" in unit
+    assert "sonarqube-cli" not in unit
 
 
 @pytest.mark.parametrize("account", foothold.ACCOUNTS)
 def test_rendered_unit_reads_no_secrets_file(account):
-    unit = foothold.render_unit(account)
+    unit = foothold.render_unit(account, PATH_ENTRIES)
     assert "EnvironmentFile" not in unit
     assert "secrets.env" not in unit
 
 
 def test_rendered_unit_launches_claude_through_the_launcher():
-    unit = foothold.render_unit("main")
+    unit = foothold.render_unit("main", PATH_ENTRIES)
     assert "%h/.dotfiles/bin/claude-foothold-launch" in unit
     assert "claude --remote-control" not in unit
 
 
 def _installed_unit(tmp_path, account="main", content=None):
     unit = tmp_path / foothold.unit_name(account)
-    unit.write_text(foothold.render_unit(account) if content is None else content)
+    unit.write_text(foothold.render_unit(account, PATH_ENTRIES) if content is None else content)
     return unit
 
 
 def _restart(tmp_path, account="main", dry_run=False, run=None):
     run = run or _recording_run()[0]
-    return foothold.restart_foothold(Logger(dry_run=dry_run), account, unit_dir=tmp_path, run=run)
+    return foothold.restart_foothold(
+        Logger(dry_run=dry_run), account, unit_dir=tmp_path, run=run, path_entries=PATH_ENTRIES,
+    )
 
 
 PROBE = ("curl", "-s", "--max-time", "5", "-o", "/dev/null", foothold.NETWORK_PROBE_URL)
@@ -139,7 +161,7 @@ def test_restart_probes_the_network_then_reloads_and_restarts_without_touching_t
 
 
 def test_rendered_unit_ends_the_session_only_on_stop_never_on_start():
-    unit = foothold.render_unit("main")
+    unit = foothold.render_unit("main", PATH_ENTRIES)
     assert "ExecStop=-/usr/bin/env tmux kill-session -t =claude-foothold\n" in unit
     assert "ExecStartPre=-" not in unit
     assert "--start claude-foothold " in unit
@@ -149,7 +171,7 @@ def test_restart_rewrites_a_stale_unit_and_reloads_before_restarting(tmp_path):
     unit = _installed_unit(tmp_path, content="[Service]\nExecStart=old\n")
     run, calls = _recording_run()
     assert _restart(tmp_path, run=run) is True
-    assert unit.read_text() == foothold.render_unit("main")
+    assert unit.read_text() == foothold.render_unit("main", PATH_ENTRIES)
     assert calls == [PROBE, RELOAD, RESTART]
 
 
@@ -183,7 +205,7 @@ def test_restart_without_an_installed_unit_warns_and_runs_nothing(tmp_path, caps
     run, calls = _recording_run()
     assert _restart(tmp_path, run=run) is False
     assert calls == []
-    assert "dotfiles-setup install" in capsys.readouterr().out
+    assert "dfctl apply" in capsys.readouterr().out
 
 
 def test_restart_dry_run_runs_nothing(tmp_path):
@@ -199,9 +221,16 @@ def test_restart_reports_failure_when_systemctl_fails(tmp_path, capsys):
     assert "no bus" in capsys.readouterr().out
 
 
-def _run_launcher(tmp_path, claude_script, args, secrets=None, secrets_mode=0o600):
+def _jq_dir():
+    found = shutil.which("jq")
+    return str(Path(found).parent) if found else "/usr/bin"
+
+
+def _run_launcher(tmp_path, claude_script, args, secrets=None, secrets_mode=0o600, preset=None):
     home = tmp_path / "home"
     (home / ".config/dotfiles").mkdir(parents=True)
+    if preset is not None:
+        (home / ".config/dotfiles/state.json").write_text(f'{{"preset_name": "{preset}"}}')
     if secrets is not None:
         secrets_file = home / ".config/dotfiles/secrets.env"
         secrets_file.write_text(secrets)
@@ -214,7 +243,7 @@ def _run_launcher(tmp_path, claude_script, args, secrets=None, secrets_mode=0o60
     launcher = Path(__file__).parent.parent / "bin" / "claude-foothold-launch"
     result = subprocess.run(
         [str(launcher), *args],
-        env={"HOME": str(home), "PATH": f"{fake_bin}:/usr/bin:/bin"},
+        env={"HOME": str(home), "PATH": f"{fake_bin}:{_jq_dir()}:/usr/bin:/bin"},
         capture_output=True, text=True, check=True, cwd=tmp_path,
     )
     return result.stdout.strip()
@@ -223,6 +252,26 @@ def _run_launcher(tmp_path, claude_script, args, secrets=None, secrets_mode=0o60
 def test_launcher_exports_secrets_to_claude(tmp_path):
     out = _run_launcher(tmp_path, 'echo "$FOO|$1|$2|$3"', ["foothold-x"], secrets="FOO='bar baz'\n")
     assert out == "bar baz|--remote-control|foothold-x|"
+
+
+SHOW_OTEL = 'echo "${CLAUDE_OTEL_ACCOUNT-unset}|$OTEL_RESOURCE_ATTRIBUTES"'
+
+
+needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+
+
+@needs_jq
+def test_launcher_labels_the_otel_account_main(tmp_path):
+    out = _run_launcher(tmp_path, SHOW_OTEL, ["n"], preset="personal")
+    account, attrs = out.splitlines()[-1].split("|")
+    assert account == "unset"
+    assert "account=main" in attrs.split(",")
+
+
+@needs_jq
+def test_launcher_labels_the_otel_account_burst(tmp_path):
+    out = _run_launcher(tmp_path, SHOW_OTEL, ["n", "burst"], preset="personal")
+    assert "account=burst" in out.splitlines()[-1].split("|")[1].split(",")
 
 
 def test_rule029_launcher_ignores_group_readable_secrets(tmp_path):
@@ -392,7 +441,7 @@ def test_start_warns_to_stderr_about_a_missing_secrets_file_and_still_starts(tmp
 
 def test_start_warns_to_stderr_about_unsafe_secrets_and_still_starts(tmp_path):
     result, calls = _run_start(tmp_path, ["sess", "/w", "host"], session_exists=False, secrets="A=b\n", secrets_mode=0o644)
-    assert "claude-foothold-launch: secrets.env skipped: group/other can access it (mode 644)" in result.stderr
+    assert "claude-env-load: secrets.env skipped: group/other can access it (mode 644)" in result.stderr
     assert result.returncode == 0
     assert calls[-1][0] == "new-session"
 
@@ -417,7 +466,7 @@ OLD_UNIT = (
 
 def _assert_upgraded(unit, account, calls):
     text = unit.read_text()
-    assert text == foothold.render_unit(account)
+    assert text == foothold.render_unit(account, PATH_ENTRIES)
     assert "EnvironmentFile" not in text
     assert "sh -c" not in text
     assert ("systemctl", "--user", "daemon-reload") in calls
@@ -445,7 +494,7 @@ def test_launcher_runs_the_main_account_without_a_config_dir(tmp_path):
 
 @pytest.mark.parametrize("account", foothold.ACCOUNTS)
 def test_rendered_unit_hardcodes_no_home_directory(account):
-    assert "/home/" not in foothold.render_unit(account)
+    assert "/home/" not in foothold.render_unit(account, PATH_ENTRIES)
 
 
 def test_install_writes_the_unit_enables_linger_and_starts_it(tmp_path):
@@ -464,13 +513,13 @@ def test_install_skips_the_burst_unit_until_the_burst_account_has_logged_in(tmp_
     assert _install(tmp_path, account="burst", run=run) is False
     assert calls == []
     assert not (tmp_path / "claude-foothold-burst.service").exists()
-    assert "claude-burst" in capsys.readouterr().out
+    assert "claude --burst" in capsys.readouterr().out
 
 
 def test_install_sets_up_the_burst_unit_once_logged_in(tmp_path):
     run, calls = _recording_run()
     assert _install(tmp_path, account="burst", run=run, burst_dir=_logged_in_burst(tmp_path)) is True
-    assert (tmp_path / "claude-foothold-burst.service").read_text() == foothold.render_unit("burst")
+    assert (tmp_path / "claude-foothold-burst.service").read_text() == foothold.render_unit("burst", PATH_ENTRIES)
     assert calls[-1] == ("systemctl", "--user", "enable", "--now", "claude-foothold-burst.service")
 
 
@@ -538,6 +587,7 @@ def _sync(tmp_path, wanted, run=None, burst_dir=None):
     run = run or _recording_run()[0]
     foothold.sync_footholds(
         Logger(dry_run=False), wanted, unit_dir=tmp_path, run=run, burst_dir=burst_dir or tmp_path / "no-burst",
+        path_entries=PATH_ENTRIES,
     )
 
 
@@ -599,14 +649,18 @@ def test_restart_footholds_restarts_every_installed_unit(tmp_path):
     _installed_unit(tmp_path, "main")
     _installed_unit(tmp_path, "burst")
     run, calls = _recording_run()
-    assert foothold.restart_footholds(Logger(dry_run=False), unit_dir=tmp_path, run=run) is True
+    assert foothold.restart_footholds(
+        Logger(dry_run=False), unit_dir=tmp_path, run=run, path_entries=PATH_ENTRIES,
+    ) is True
     # One call, so a restart issued from inside the main session still reaches the burst unit.
     assert calls == [PROBE, RELOAD, (*RESTART, "claude-foothold-burst.service")]
 
 
 def test_restart_footholds_fails_when_none_is_installed(tmp_path, capsys):
     run, calls = _recording_run()
-    assert foothold.restart_footholds(Logger(dry_run=False), unit_dir=tmp_path, run=run) is False
+    assert foothold.restart_footholds(
+        Logger(dry_run=False), unit_dir=tmp_path, run=run, path_entries=PATH_ENTRIES,
+    ) is False
     assert calls == []
     assert "No foothold is installed" in capsys.readouterr().out
 
